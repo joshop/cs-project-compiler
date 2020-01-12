@@ -14,11 +14,12 @@ StringLiteral < '\"' ~((!'\"' .)*) '\"'
 Variable < ~(identifier)
 AddrVariable < ~(identifier)
 Dereference < '&'
-Type < ~(Type '*' / 'int' / 'char')
+Type < ~(Type '*' / 'int' / 'char' / 'short')
 IncDec < '++' / '--'
-Statement < ';' / StatementDeclare ';' / Expression ';' / StatementBlock
+Statement < ';' / StatementDeclare ';' / Expression ';' / StatementBlock / StatementIf
 StatementBlock < '{' Statement* '}'
 StatementDeclare < Type Variable ('=' Expression)?
+StatementIf < 'if' '(' Expression ')' Statement
 Sizeof < 'sizeof' '('? (Type / Variable) ')'?
 ExpressionAtom < Sizeof / '(' Expression ')' / IntegerLiteral / CharLiteral / StringLiteral / Variable
 ExpressionUnaryPost < ExpressionAssignLeft IncDec / ExpressionAtom
@@ -74,10 +75,10 @@ ExpressionAssignLeft < AddrVariable / '*' ExpressionTernary
  * Finally, end marks the end of a program.
  */
 string[][string] variables;
-enum string[string] bitwidth = ["int": "4", "int*": "addr", "char": "1", "char*": "addr"];
+enum string[string] bitwidth = ["int": "4", "int*": "addr", "char": "1", "char*": "addr", "short": "2", "short*": "addr"];
 void main() {
 	//writeln(compile("*b"));
-	writeln(compile("{char *s = \"abcdef\"; *s = 'q';}"));
+	writeln(compile("{char *s = \"foobar\"; *(s+1) = 'x';}"));
 }
 string[] compile(string code) {
 	auto tree = CMinusMinus(code);
@@ -100,7 +101,7 @@ string[] compile(string code) {
 				variables[p.children[1].matches[0]] = [p.children[0].matches[0]];
 				if (p.children.length == 3) {
 					parseExpression(p.children[2]);
-					if (stack[$-1][1] != p.children[0].matches[0]) {
+					if (bitwidth[stack[$-1][1]] != "addr" && bitwidth[p.children[0].matches[0]] != "addr" && to!int(bitwidth[stack[$-1][1]]) > to!int(bitwidth[p.children[0].matches[0]])) {
 						writefln("Compiler error (line %d): conflicting types for assignment: %s = %s",count(p.input[0..p.begin],"\n")+1,p.children[0].matches[0],stack[$-1][1]);
 						exit(1);
 					}
@@ -112,6 +113,15 @@ string[] compile(string code) {
 				foreach (m; p.children) {
 					parseExpression(m);
 				}
+				return;
+			case name ~ ".StatementIf":
+				parseExpression(p.children[0]);
+				instructions ~= "0 test== $" ~ to!string(stack.length-1);
+				stack = stack.remove(stack.length-1);
+				int oldLabNum = labelNum;
+				instructions ~= "jmpi label" ~ to!string(labelNum++);
+				parseExpression(p.children[1]);
+				instructions ~= "label" ~ to!string(oldLabNum) ~ ":";
 				return;
 			case name ~ ".ExpressionAssignLeft":
 				parseExpression(p.children[0]);
@@ -128,7 +138,7 @@ string[] compile(string code) {
 				if (p.children[0].name == name ~ ".ExpressionAssignLeft") {
 					parseExpression(p.children[0]);
 					assert(stack[$-1][1] in bitwidth);
-					if (stack[$-1][1] != stack[$-2][1]) {
+					if (bitwidth[stack[$-1][1]] != "addr" && bitwidth[stack[$-2][1]] != "addr" && to!int(bitwidth[stack[$-1][1]]) < to!int(bitwidth[stack[$-2][1]])) {
 						writefln("Compiler error (line %d): conflicting types for assignment: %s = %s",count(p.input[0..p.begin],"\n")+1,stack[$-1][1],stack[$-2][1]);
 						exit(1);
 					}
@@ -139,7 +149,11 @@ string[] compile(string code) {
 			case name ~ ".IntegerLiteral":
 				assert(p.children.length = p.matches[0].length, "An IntegerLiteral has incorrect number of children.");
 				instructions ~= "$" ~ to!string(stack.length) ~ " = " ~ p.matches[0];
-				stack ~= ["","int","no"];	
+				if (to!int(p.matches[0]) >= 2^^16) {
+					stack ~= ["","int","no"];	
+				} else {
+					stack ~= ["","short","no"];
+				}
 				return;
 			case name ~ ".CharLiteral":
 				instructions ~= "$" ~ to!string(stack.length) ~ " = " ~ to!string(to!int(p.matches[1][0]));
@@ -231,13 +245,15 @@ string[] compile(string code) {
 					switch (higher) {
 						case "char":
 						case "int":
+						case "short":
 							instructions ~= "$" ~ to!string(stack.length-2) ~ " " ~ m.matches[0] ~ "= $" ~ to!string(stack.length-1);
 							stack = stack.remove(stack.length-1);
 							stack[$-1][1] = higher;
 							break;
 						case "char*":
 						case "int*":
-							if (lower == higher[0..$-1] && (m.matches[0] == "+" || m.matches[0] == "-")) {
+						case "short*":
+							if ((lower == "int" || lower == "char" || lower == "short") && (m.matches[0] == "+" || m.matches[0] == "-")) {
 								instructions ~= "$" ~ to!string(stack.length-(3-which)) ~ " *= " ~ bitwidth[lower];
 								instructions ~= "$" ~ to!string(stack.length-(which)) ~ " " ~ m.matches[0] ~ "= $" ~ to!string(stack.length-(3-which));
 								if (which == 1) {
@@ -272,12 +288,14 @@ string[] compile(string code) {
 				if (p.children.length > 1) {
 					assert(p.children.length == 3, "ExpressionTernary must have three children.");
 					instructions ~= "$" ~ to!string(stack.length-1) ~ " test== 0";
+					int oldLabNum = labelNum;
 					instructions ~= "jmpi label" ~ to!string(labelNum++);
 					parseExpression(p.children[1]);
+					int oldLabNum2 = labelNum;
 					instructions ~= "jmp label" ~ to!string(labelNum++);
-					instructions ~= "label" ~ to!string(labelNum-2) ~ ":";
+					instructions ~= "label" ~ to!string(oldLabNum) ~ ":";
 					parseExpression(p.children[2]);
-					instructions ~= "label" ~ to!string(labelNum-1) ~ ":";
+					instructions ~= "label" ~ to!string(oldLabNum2) ~ ":";
 				}
 				return;
 			default:
