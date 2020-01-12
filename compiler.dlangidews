@@ -1,0 +1,9 @@
+{
+    "includePath": {
+    },
+    "name": "compiler",
+    "description": "My final project.",
+    "projects": {
+        "compiler": "dub.json"
+    }
+}

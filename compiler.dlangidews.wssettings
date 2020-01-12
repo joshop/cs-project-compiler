@@ -1,0 +1,10 @@
+{
+    "startupProject": "compiler",
+    "expandedItems": [
+        "/home/rous/pegged/compiler/source",
+        "/home/rous/pegged/compiler/dub.json"
+    ],
+    "selectedWorkspaceItem": "/home/rous/pegged/compiler/source/main.d",
+    "files": [
+    ]
+}
