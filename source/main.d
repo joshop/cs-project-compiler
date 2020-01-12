@@ -5,6 +5,8 @@ import std.conv: to;
 import std.algorithm.searching: canFind, endsWith, count;
 import std.algorithm.mutation: remove;
 import core.stdc.stdlib: exit;
+
+
 enum string name = "CMinusMinus";
 mixin(grammar(name ~ `:
 Start < Statement
@@ -49,6 +51,8 @@ ExpressionTernary < ExpressionLogOr ('?' ExpressionLogOr ':' ExpressionLogOr)?
 Expression < (ExpressionAssignLeft ('=' / '+=' / '-=' / '*=' / '/=' / '%=' / '<<=' / '>>=' / '&=' / '|=' / '^='))? ExpressionTernary
 ExpressionAssignLeft < AddrVariable / '*' ExpressionTernary
 `));
+
+
 /* This compiler outputs Machine Agnostic Assembly. This is a basic assembly-like intermediate language where all lines should ideally compile to one or two machine instructions.
  * Each line consists of an operator, a right side operand and a left side operand (for binary operations only).
  * The operands can be integers in any base, labels or temps. Temps are values that would ideally be stored in registers, represented with a $ followed by an integer.
@@ -74,12 +78,15 @@ ExpressionAssignLeft < AddrVariable / '*' ExpressionTernary
  * acts like 8 data 0 operations, but on a 32-bit system it acts like 4 data 0 operations.
  * Finally, end marks the end of a program.
  */
+
+
 string[][string] variables;
 enum string[string] bitwidth = ["int": "4", "int*": "addr", "char": "1", "char*": "addr", "short": "2", "short*": "addr"];
 void main() {
 	//writeln(compile("*b"));
 	writeln(compile("{char *s = \"foobar\"; *(s+1) = 'x';}"));
 }
+
 string[] compile(string code) {
 	auto tree = CMinusMinus(code);
 	writeln(tree);
@@ -95,6 +102,7 @@ string[] compile(string code) {
 					assert(p.children.length == 1);
 					parseExpression(p.children[0]);
 				}
+
 				return;	
 			case name ~ ".StatementDeclare":
 				assert(p.children.length > 1 && p.children.length < 4);
@@ -105,14 +113,17 @@ string[] compile(string code) {
 						writefln("Compiler error (line %d): conflicting types for assignment: %s = %s",count(p.input[0..p.begin],"\n")+1,p.children[0].matches[0],stack[$-1][1]);
 						exit(1);
 					}
+
 					instructions ~= "$" ~ to!string(stack.length-1) ~ " write_" ~ bitwidth[p.children[0].matches[0]] ~ " " ~ p.children[1].matches[0];
 					stack = stack.remove(stack.length-1);
 				}
+
 				return;
 			case name ~ ".StatementBlock":
 				foreach (m; p.children) {
 					parseExpression(m);
 				}
+
 				return;
 			case name ~ ".StatementIf":
 				parseExpression(p.children[0]);
@@ -130,8 +141,10 @@ string[] compile(string code) {
 						writefln("Compiler error (line %d): type %s is not a pointer.",count(p.input[0..p.begin],"\n")+1,stack[$-1][1]);
 						exit(1);
 					}
+
 					stack[$-1][1] = stack[$-1][1][0..$-1];
 				}
+
 				return;
 			case name ~ ".Expression":
 				parseExpression(p.children[$-1]);
@@ -142,9 +155,11 @@ string[] compile(string code) {
 						writefln("Compiler error (line %d): conflicting types for assignment: %s = %s",count(p.input[0..p.begin],"\n")+1,stack[$-1][1],stack[$-2][1]);
 						exit(1);
 					}
+
 					instructions ~= "$" ~ to!string(stack.length-2) ~ " write_" ~ bitwidth[stack[$-1][1]] ~ " $" ~ to!string(stack.length-1);
 					stack = stack.remove(stack.length-2,stack.length-1);
 				}
+
 				return;
 			case name ~ ".IntegerLiteral":
 				assert(p.children.length = p.matches[0].length, "An IntegerLiteral has incorrect number of children.");
@@ -154,6 +169,7 @@ string[] compile(string code) {
 				} else {
 					stack ~= ["","short","no"];
 				}
+
 				return;
 			case name ~ ".CharLiteral":
 				instructions ~= "$" ~ to!string(stack.length) ~ " = " ~ to!string(to!int(p.matches[1][0]));
@@ -166,6 +182,7 @@ string[] compile(string code) {
 				foreach(c; p.matches[1]) {
 					temps[$-1] ~= c;
 				}
+
 				temps[$-1] ~= 0;
 				return;
 			case name ~ ".AddrVariable":
@@ -176,6 +193,7 @@ string[] compile(string code) {
 					writefln("Compiler error (line %d): variable %s not defined.", count(p.input[0..p.begin],"\n")+1,p.matches[0]);
 					exit(1);
 				}
+
 				instructions ~= "$" ~ to!string(stack.length) ~ (addrVariable ? " = " : " read_" ~ bitwidth[variables[p.matches[0]][0]] ~ " ") ~ p.matches[0];
 				stack ~= [p.matches[0],variables[p.matches[0]][0],addrVariable ? "yes" : "no"];
 				return;
@@ -189,6 +207,7 @@ string[] compile(string code) {
 					}
 					instructions ~= "$" ~ to!string(stack.length) ~ " = " ~ bitwidth[variables[p.children[0].matches[0]][0]];
 				}
+
 				stack ~= ["","int","no"];
 				return;
 			case name ~ ".ExpressionUnaryPost":
@@ -201,6 +220,7 @@ string[] compile(string code) {
 					instructions ~= "$" ~ to!string(stack.length-1) ~ " write_" ~ bitwidth[stack[$-1][1]] ~ " " ~ stack[$-1][0];
 					instructions ~= "pop $" ~ to!string(stack.length-1);
 				}
+
 				return;
 			case name ~ ".ExpressionUnaryPre":
 				parseExpression(p.children[$-1]);
@@ -211,6 +231,7 @@ string[] compile(string code) {
 							writefln("Compiler error (line %d): type %s is not a pointer.",count(p.input[0..p.begin],"\n")+1,stack[$-1][1]);
 							exit(1);
 						}
+
 						instructions ~= "$" ~ to!string(stack.length-1) ~ " read_" ~ bitwidth[stack[$-1][1][0..$-1]] ~ " $" ~ to!string(stack.length-1);
 						stack[$-1][1] = stack[$-1][1][0..$-1];
 					} else if (m.matches[0] == "&") {
@@ -218,6 +239,7 @@ string[] compile(string code) {
 							writefln("Compiler error (line %d): this is not a variable!",count(p.input[0..p.begin],"\n")+1);
 							exit(1);
 						}
+
 						stack[$-1][1] = stack[$-1][1] ~ "*";
 					} else if (m.matches[0].endsWith(")")) {
 						stack[$-1][1] = m.matches[0][1..$-1];
@@ -226,8 +248,11 @@ string[] compile(string code) {
 						if (m.matches[0] == "++" || m.matches[0] == "--") {
 							instructions ~= "$" ~ to!string(stack.length-1) ~ " write_" ~ bitwidth[stack[$-1][1]] ~ " " ~ stack[$-1][0];
 						}
+
 					}
+
 				}
+
 				return;
 			case name ~ ".ExpressionSum":
 			case name ~ ".ExpressionProd":
@@ -253,7 +278,7 @@ string[] compile(string code) {
 						case "char*":
 						case "int*":
 						case "short*":
-							if ((lower == "int" || lower == "char" || lower == "short") && (m.matches[0] == "+" || m.matches[0] == "-")) {
+							if ((lower == "int" || lower == "char" || lower == "short")&& (m.matches[0] == "+" || m.matches[0] == "-")) {
 								instructions ~= "$" ~ to!string(stack.length-(3-which)) ~ " *= " ~ bitwidth[lower];
 								instructions ~= "$" ~ to!string(stack.length-(which)) ~ " " ~ m.matches[0] ~ "= $" ~ to!string(stack.length-(3-which));
 								if (which == 1) {
@@ -268,7 +293,9 @@ string[] compile(string code) {
 							writefln("Compiler error (line %d): invalid types: %s %s %s",count(p.input[0..p.begin],"\n")+1,stack[$-2][1],m.matches[0],stack[$-1][1]);
 							exit(1);
 					}
+
 				}
+
 				return;
 			case name ~ ".ExpressionEq":
 			case name ~ ".ExpressionCmp":
@@ -282,6 +309,7 @@ string[] compile(string code) {
 					instructions ~= "test $" ~ to!string(stack.length-2);
 					stack = stack.remove(stack.length-1);
 				}
+
 				return;
 			case name ~ ".ExpressionTernary":
 				parseExpression(p.children[0]);
@@ -297,16 +325,20 @@ string[] compile(string code) {
 					parseExpression(p.children[2]);
 					instructions ~= "label" ~ to!string(oldLabNum2) ~ ":";
 				}
+
 				return;
 			default:
 				if (p.name == name ~ ".ExpressionUnaryPreRep") {
 					writeln(p.children);
-				}	
+				}
+
 				assert(p.children.length == 1, "Too many children for " ~ p.name);
 				parseExpression(p.children[0]);
 				return;
 		}
+
 	}
+
 	parseExpression(tree);
 	instructions ~= "end";
 	foreach(string vname, string[] attributes; variables) {
@@ -316,12 +348,17 @@ string[] compile(string code) {
 		} else {
 			foreach(i;0..to!int(bitwidth[attributes[0]])) instructions ~= "data 0";
 		}
+
 	}
+
 	foreach(id, int[] content; temps) {
 		instructions ~= "temp" ~ to!string(id) ~ ":";
 		foreach(int v; content) {
 			instructions ~= "data " ~ to!string(v);
 		}
+
 	}
+
 	return instructions;
 }
+
