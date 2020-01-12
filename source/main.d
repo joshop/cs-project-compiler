@@ -9,16 +9,18 @@ enum string name = "CMinusMinus";
 mixin(grammar(name ~ `:
 Start < Statement
 IntegerLiteral < ~([0-9]+)
+CharLiteral < "'" . "'"
+StringLiteral < '\"' ~((!'\"' .)*) '\"'
 Variable < ~(identifier)
 AddrVariable < ~(identifier)
 Dereference < '&'
-Type < ~(Type '*' / 'int')
+Type < ~(Type '*' / 'int' / 'char')
 IncDec < '++' / '--'
 Statement < ';' / StatementDeclare ';' / Expression ';' / StatementBlock
 StatementBlock < '{' Statement* '}'
 StatementDeclare < Type Variable ('=' Expression)?
 Sizeof < 'sizeof' '('? (Type / Variable) ')'?
-ExpressionAtom < Sizeof / '(' Expression ')' / IntegerLiteral / Variable
+ExpressionAtom < Sizeof / '(' Expression ')' / IntegerLiteral / CharLiteral / StringLiteral / Variable
 ExpressionUnaryPost < ExpressionAssignLeft IncDec / ExpressionAtom
 ExpressionUnaryPreRep < '-' / '+' / '~' / '!' / '*' / ~('(' Type ')')
 ExpressionUnaryPre < IncDec ExpressionAssignLeft / ExpressionUnaryPreRep* (ExpressionUnaryPost / Dereference* ExpressionAssignLeft)
@@ -72,10 +74,10 @@ ExpressionAssignLeft < AddrVariable / '*' ExpressionTernary
  * Finally, end marks the end of a program.
  */
 string[][string] variables;
-enum string[string] bitwidth = ["int": "4", "int*": "addr"];
+enum string[string] bitwidth = ["int": "4", "int*": "addr", "char": "1", "char*": "addr"];
 void main() {
 	//writeln(compile("*b"));
-	writeln(compile("{int *b; *(b+1) = 8;}"));
+	writeln(compile("{char *s = \"abcdef\"; *s = 'q';}"));
 }
 string[] compile(string code) {
 	auto tree = CMinusMinus(code);
@@ -83,6 +85,7 @@ string[] compile(string code) {
 	string[][] stack;
 	string[] instructions;
 	int labelNum = 0;
+	int[][] temps;
 	void parseExpression(ParseTree p) {
 		bool addrVariable = false;
 		switch (p.name) {
@@ -117,7 +120,6 @@ string[] compile(string code) {
 						writefln("Compiler error (line %d): type %s is not a pointer.",count(p.input[0..p.begin],"\n")+1,stack[$-1][1]);
 						exit(1);
 					}
-					//instructions ~= "$" ~ to!string(stack.length-1) ~ " read_" ~ bitwidth[stack[$-1][1][0..$-1]] ~ " $" ~ to!string(stack.length-1);
 					stack[$-1][1] = stack[$-1][1][0..$-1];
 				}
 				return;
@@ -138,6 +140,19 @@ string[] compile(string code) {
 				assert(p.children.length = p.matches[0].length, "An IntegerLiteral has incorrect number of children.");
 				instructions ~= "$" ~ to!string(stack.length) ~ " = " ~ p.matches[0];
 				stack ~= ["","int","no"];	
+				return;
+			case name ~ ".CharLiteral":
+				instructions ~= "$" ~ to!string(stack.length) ~ " = " ~ to!string(to!int(p.matches[1][0]));
+				stack ~= ["","char","no"];
+				return;
+			case name ~ ".StringLiteral":
+				instructions ~= "$" ~ to!string(stack.length) ~ " = temp" ~ to!string(temps.length);
+				stack ~= ["","char*","no"];
+				temps ~= [[]];
+				foreach(c; p.matches[1]) {
+					temps[$-1] ~= c;
+				}
+				temps[$-1] ~= 0;
 				return;
 			case name ~ ".AddrVariable":
 				addrVariable = true;
@@ -214,12 +229,15 @@ string[] compile(string code) {
 					string lower = bitwidth[stack[$-1][1]] > bitwidth[stack[$-2][1]] ? stack[$-2][1] : stack[$-1][1];
 					int which = bitwidth[stack[$-1][1]] > bitwidth[stack[$-2][1]] ? 1 : 2;
 					switch (higher) {
+						case "char":
 						case "int":
 							instructions ~= "$" ~ to!string(stack.length-2) ~ " " ~ m.matches[0] ~ "= $" ~ to!string(stack.length-1);
 							stack = stack.remove(stack.length-1);
+							stack[$-1][1] = higher;
 							break;
+						case "char*":
 						case "int*":
-							if (lower == "int" && (m.matches[0] == "+" || m.matches[0] == "-")) {
+							if (lower == higher[0..$-1] && (m.matches[0] == "+" || m.matches[0] == "-")) {
 								instructions ~= "$" ~ to!string(stack.length-(3-which)) ~ " *= " ~ bitwidth[lower];
 								instructions ~= "$" ~ to!string(stack.length-(which)) ~ " " ~ m.matches[0] ~ "= $" ~ to!string(stack.length-(3-which));
 								if (which == 1) {
@@ -279,6 +297,12 @@ string[] compile(string code) {
 			instructions ~= "addr 0";
 		} else {
 			foreach(i;0..to!int(bitwidth[attributes[0]])) instructions ~= "data 0";
+		}
+	}
+	foreach(id, int[] content; temps) {
+		instructions ~= "temp" ~ to!string(id) ~ ":";
+		foreach(int v; content) {
+			instructions ~= "data " ~ to!string(v);
 		}
 	}
 	return instructions;
