@@ -146,7 +146,7 @@ string[] compile(string code) {
 				parseExpression(p.children[0]);
 				instructions ~= "0 test== $" ~ to!string(stack.length-1); // note: $ locations are used as a stack, with higher numbers being higher on the stack.
 				stack = stack.remove(stack.length-1);
-				int oldLabNum = labelNum; //  labelNum could change when expression is parsed
+				int oldLabNum = labelNum++; //  labelNum could change when expression is parsed
 				instructions ~= "jmpi label" ~ to!string(labelNum++); // the jmpi skips code if expression false
 				parseExpression(p.children[1]);
 				instructions ~= "label" ~ to!string(oldLabNum) ~ ":";
@@ -162,6 +162,7 @@ string[] compile(string code) {
 				 */
 				int startLabNum = labelNum; // label of start of loop
 				instructions ~= "label" ~ to!string(labelNum++) ~ ":";
+				labelNum++;
 				parseExpression(p.children[0]);
 				int endLabNum = labelNum; // label after loop
 				instructions ~= "0 test== $" ~ to!string(stack.length-1);
