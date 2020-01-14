@@ -12,17 +12,18 @@ enum string name = "CMinusMinus";
 mixin(grammar(name ~ `:
 Start < Statement
 IntegerLiteral < ~([0-9]+)
-CharLiteral < "'" . "'"
-StringLiteral < '\"' ~((!'\"' .)*) '\"'
+CharLiteral <- "'" . "'"
+StringLiteral <- '\"' ~((!'\"' .)*) '\"'
 Variable < ~(identifier)
 AddrVariable < ~(identifier)
 Dereference < '&'
 Type < ~(Type '*' / 'int' / 'char' / 'short')
 IncDec < '++' / '--'
-Statement < ';' / StatementDeclare ';' / Expression ';' / StatementBlock / StatementIf
+Statement < ';' / StatementDeclare ';' / Expression ';' / StatementBlock / StatementIf / StatementWhile
 StatementBlock < '{' Statement* '}'
 StatementDeclare < Type Variable ('=' Expression)?
 StatementIf < 'if' '(' Expression ')' Statement
+StatementWhile < 'while' '(' Expression ')' Statement
 Sizeof < 'sizeof' '('? (Type / Variable) ')'?
 ExpressionAtom < Sizeof / '(' Expression ')' / IntegerLiteral / CharLiteral / StringLiteral / Variable
 ExpressionUnaryPost < ExpressionAssignLeft IncDec / ExpressionAtom
@@ -34,22 +35,23 @@ ExpressionSumRep < ('+' / '-') ExpressionProd
 ExpressionSum < ExpressionProd ExpressionSumRep*
 ExpressionShiftRep < ('<<' / '>>') ExpressionSum
 ExpressionShift < ExpressionSum ExpressionShiftRep*
-ExpressionCmpRep < ('<' / '>' / '<=' / '>=') ExpressionShift
+ExpressionCmpRep < ('<=' / '>=' / '<' / '>') ExpressionShift
 ExpressionCmp < ExpressionShift ExpressionCmpRep*
 ExpressionEqRep < ('==' / '!=') ExpressionCmp
 ExpressionEq < ExpressionCmp ExpressionEqRep*
-ExpressionBitAndRep < '&' ExpressionEq
+ExpressionBitAndRep < !'&&' '&' ExpressionEq
 ExpressionBitAnd < ExpressionEq ExpressionBitAndRep*
 ExpressionBitXorRep < '^' ExpressionBitAnd
 ExpressionBitXor < ExpressionBitAnd ExpressionBitXorRep*
-ExpressionBitOrRep < '|' ExpressionBitXor
+ExpressionBitOrRep < !'||' '|' ExpressionBitXor
 ExpressionBitOr < ExpressionBitXor ExpressionBitOrRep*
 ExpressionLogAndRep < '&&' ExpressionBitOr
 ExpressionLogAnd < ExpressionBitOr ExpressionLogAndRep*
 ExpressionLogOrRep < '||' ExpressionLogAnd
 ExpressionLogOr < ExpressionLogAnd ExpressionLogOrRep*
 ExpressionTernary < ExpressionLogOr ('?' ExpressionLogOr ':' ExpressionLogOr)?
-Expression < (ExpressionAssignLeft ('=' / '+=' / '-=' / '*=' / '/=' / '%=' / '<<=' / '>>=' / '&=' / '|=' / '^='))? ExpressionTernary
+ExpressionAssign < ('=' / '+=' / '-=' / '*=' / '/=' / '%=' / '<<=' / '>>=' / '&=' / '|=' / '^=')
+Expression < (ExpressionAssignLeft ExpressionAssign)? ExpressionTernary
 ExpressionAssignLeft < AddrVariable / '*' ExpressionTernary
 `));
 
@@ -85,7 +87,20 @@ string[][string] variables;
 enum string[string] bitwidth = ["int": "4", "int*": "addr", "char": "1", "char*": "addr", "short": "2", "short*": "addr"]; // stores the sizes of various data types
 void main() {
 	//writeln(compile("*b"));
-	writeln(compile("{char *s = \"foobar\"; *(s+1) = 'x';}"));
+				//tmp = *mystring;
+				//char *mystring = \"how NOW bRown COw\";
+				//if (tmp >= 'a' && tmp <= 'z') *mystring -= ' ';
+				//if (tmp >= 'A' && tmp <= 'Z') *mystring += ' ';
+	writeln(compile("{
+			char *mystring = \"how NOW bRown COw\";
+			char tmp;
+			while (*mystring) {
+				tmp = *mystring;
+				if (tmp >= 'a' && tmp <= 'z') *mystring -= ' ';
+				if (tmp >= 'A' && tmp <= 'Z') *mystring += ' ';
+				mystring++;
+			}
+			}"));
 }
 
 string[] compile(string code) {
@@ -102,8 +117,10 @@ string[] compile(string code) {
 				if (p.children.length > 0) {
 					assert(p.children.length == 1);
 					parseExpression(p.children[0]); // just parse the child if it's not a null statement
+					if (p.children[0].name == name ~ ".Expression") {
+						stack = stack.remove(stack.length-1); // pop stack because expression doesn't clean up after itself
+					}
 				}
-
 				return;	
 			case name ~ ".StatementDeclare":
 				assert(p.children.length > 1 && p.children.length < 4);
@@ -118,7 +135,6 @@ string[] compile(string code) {
 					instructions ~= "$" ~ to!string(stack.length-1) ~ " write_" ~ bitwidth[p.children[0].matches[0]] ~ " " ~ p.children[1].matches[0];
 					stack = stack.remove(stack.length-1); // pop stack
 				}
-
 				return;
 			case name ~ ".StatementBlock":
 				foreach (m; p.children) { // just parse each child
@@ -134,6 +150,26 @@ string[] compile(string code) {
 				instructions ~= "jmpi label" ~ to!string(labelNum++); // the jmpi skips code if expression false
 				parseExpression(p.children[1]);
 				instructions ~= "label" ~ to!string(oldLabNum) ~ ":";
+				return;
+			case name ~ ".StatementWhile":
+				/* While loops are like this:
+				 * lab1:
+				 * (evaluate expression)
+				 * if (expression is false) jmp lab2
+				 * (evaluate loop body)
+				 * jmp lab1
+				 * lab2:
+				 */
+				int startLabNum = labelNum; // label of start of loop
+				instructions ~= "label" ~ to!string(labelNum++) ~ ":";
+				parseExpression(p.children[0]);
+				int endLabNum = labelNum; // label after loop
+				instructions ~= "0 test== $" ~ to!string(stack.length-1);
+				stack = stack.remove(stack.length-1); // pop stack
+				instructions ~= "jmpi label" ~ to!string(endLabNum);
+				parseExpression(p.children[1]);
+				instructions ~= "jmp label" ~ to!string(startLabNum);
+				instructions ~= "label" ~ to!string(endLabNum) ~ ":";
 				return;
 			case name ~ ".ExpressionAssignLeft":
 				parseExpression(p.children[0]);
@@ -156,11 +192,14 @@ string[] compile(string code) {
 						writefln("Compiler error (line %d): conflicting types for assignment: %s = %s",count(p.input[0..p.begin],"\n")+1,stack[$-1][1],stack[$-2][1]);
 						exit(1);
 					}
-
+					if (p.children[1].matches[0] != "=") { // compound assignment
+						instructions ~= "$" ~ to!string(stack.length) ~ " read_" ~ bitwidth[stack[$-1][1]] ~ " $" ~ to!string(stack.length-1);
+						instructions ~= "$" ~ to!string(stack.length) ~ " " ~ p.children[1].matches[0] ~ " " ~ "$" ~ to!string(stack.length-2);
+						instructions ~= "$" ~ to!string(stack.length-2) ~ " = $" ~ to!string(stack.length);
+					}
 					instructions ~= "$" ~ to!string(stack.length-2) ~ " write_" ~ bitwidth[stack[$-1][1]] ~ " $" ~ to!string(stack.length-1);
 					stack = stack.remove(stack.length-1); // pop stack
 				}
-				stack.remove(stack.length-1); // pop stack again because we don't need the top value
 				return;
 			case name ~ ".IntegerLiteral":
 				assert(p.children.length = p.matches[0].length, "An IntegerLiteral has incorrect number of children.");
@@ -170,7 +209,6 @@ string[] compile(string code) {
 				} else {
 					stack ~= ["","short","no"];
 				}
-
 				return;
 			case name ~ ".CharLiteral":
 				instructions ~= "$" ~ to!string(stack.length) ~ " = " ~ to!string(to!int(p.matches[1][0])); // push stack
@@ -183,7 +221,6 @@ string[] compile(string code) {
 				foreach(c; p.matches[1]) {
 					temps[$-1] ~= c;
 				}
-
 				temps[$-1] ~= 0; // null terminate
 				return;
 			case name ~ ".AddrVariable":
@@ -208,7 +245,6 @@ string[] compile(string code) {
 					}
 					instructions ~= "$" ~ to!string(stack.length) ~ " = " ~ bitwidth[variables[p.children[0].matches[0]][0]]; // push stack
 				}
-
 				stack ~= ["","int","no"]; // sizeofs are ints
 				return;
 			case name ~ ".ExpressionUnaryPost":
@@ -217,6 +253,7 @@ string[] compile(string code) {
 					assert(p.children.length == 2);
 					assert(p.children[1].matches[0] == "++" || p.children[1].matches[0] == "--");
 					instructions ~= "push $" ~ to!string(stack.length-1); // store the value because postfix increment/decrement doesn't change it
+					instructions ~= "$" ~ to!string(stack.length-1) ~ " read_" ~ bitwidth[stack[$-1][1]] ~ " $" ~ to!string(stack.length-1);
 					instructions ~= p.children[1].matches[0] ~ " $" ~ to!string(stack.length-1); // increment or decrement
 					instructions ~= "$" ~ to!string(stack.length-1) ~ " write_" ~ bitwidth[stack[$-1][1]] ~ " " ~ stack[$-1][0]; // update variable
 					instructions ~= "pop $" ~ to!string(stack.length-1); // restore value
@@ -318,6 +355,7 @@ string[] compile(string code) {
 				if (p.children.length > 1) {
 					assert(p.children.length == 3, "ExpressionTernary must have three children.");
 					instructions ~= "$" ~ to!string(stack.length-1) ~ " test== 0";
+					stack = stack.remove(stack.length-1);
 					int oldLabNum = labelNum; // label to jump to if false to skip true code
 					instructions ~= "jmpi label" ~ to!string(labelNum++);
 					parseExpression(p.children[1]); // true code
