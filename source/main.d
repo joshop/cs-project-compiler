@@ -13,7 +13,7 @@ mixin(grammar(name ~ `:
 Start < Statement
 IntegerLiteral < ~([0-9]+)
 CharLiteral <- "'" . "'"
-StringLiteral <- '\"' ~((!'\"' .)*) '\"'
+StringLiteral <- '\"' ~(((!'\"' .) | :'\\' '\"')*) !'\\' '\"'
 Variable < ~(identifier)
 AddrVariable < ~(identifier)
 Dereference < '&'
@@ -27,11 +27,11 @@ StatementWhile < 'while' '(' Expression ')' Statement
 Sizeof < 'sizeof' '('? (Type / Variable) ')'?
 ExpressionAtom < Sizeof / '(' Expression ')' / IntegerLiteral / CharLiteral / StringLiteral / Variable
 ExpressionUnaryPost < ExpressionAssignLeft IncDec / ExpressionAtom
-ExpressionUnaryPreRep < '-' / '+' / '~' / '!' / '*' / ~('(' Type ')')
+ExpressionUnaryPreRep < !'--' '-' / !'++' '+' / '~' / '!' / '*' / ~('(' Type ')')
 ExpressionUnaryPre < IncDec ExpressionAssignLeft / ExpressionUnaryPreRep* (ExpressionUnaryPost / Dereference* ExpressionAssignLeft)
 ExpressionProdRep < ('*' / '/' / '%') ExpressionUnaryPre
 ExpressionProd < ExpressionUnaryPre ExpressionProdRep*
-ExpressionSumRep < ('+' / '-') ExpressionProd
+ExpressionSumRep < (!'++' '+' / !'--' '-') ExpressionProd
 ExpressionSum < ExpressionProd ExpressionSumRep*
 ExpressionShiftRep < ('<<' / '>>') ExpressionSum
 ExpressionShift < ExpressionSum ExpressionShiftRep*
@@ -50,9 +50,10 @@ ExpressionLogAnd < ExpressionBitOr ExpressionLogAndRep*
 ExpressionLogOrRep < '||' ExpressionLogAnd
 ExpressionLogOr < ExpressionLogAnd ExpressionLogOrRep*
 ExpressionTernary < ExpressionLogOr ('?' ExpressionLogOr ':' ExpressionLogOr)?
-ExpressionAssign < ('=' / '+=' / '-=' / '*=' / '/=' / '%=' / '<<=' / '>>=' / '&=' / '|=' / '^=')
+ExpressionAssign < !'==' ('=' / '+=' / '-=' / '*=' / '/=' / '%=' / '<<=' / '>>=' / '&=' / '|=' / '^=')
 Expression < (ExpressionAssignLeft ExpressionAssign)? ExpressionTernary
-ExpressionAssignLeft < AddrVariable / '*' ExpressionTernary
+ExpressionAssignLeftParens < '*' ExpressionTernary / '(' ExpressionAssignLeftParens ')'
+ExpressionAssignLeft < AddrVariable / ExpressionAssignLeftParens
 `));
 
 /*
@@ -86,12 +87,7 @@ ExpressionAssignLeft < AddrVariable / '*' ExpressionTernary
 string[][string] variables;
 enum string[string] bitwidth = ["int": "4", "int*": "addr", "char": "1", "char*": "addr", "short": "2", "short*": "addr"]; // stores the sizes of various data types
 void main() {
-	//writeln(compile("*b"));
-				//tmp = *mystring;
-				//char *mystring = \"how NOW bRown COw\";
-				//if (tmp >= 'a' && tmp <= 'z') *mystring -= ' ';
-				//if (tmp >= 'A' && tmp <= 'Z') *mystring += ' ';
-	writeln(compile("{
+	/*writeln(compile("{
 			char *mystring = \"how NOW bRown COw\";
 			char tmp;
 			while (*mystring) {
@@ -100,7 +96,10 @@ void main() {
 				if (tmp >= 'A' && tmp <= 'Z') *mystring += ' ';
 				mystring++;
 			}
-			}"));
+			}"));*/
+	variables["chars"] = ["char*"];
+	variables["mystring"] = ["char*"];
+	writeln(compile(`*(chars)++;`));
 }
 
 string[] compile(string code) {
@@ -146,7 +145,7 @@ string[] compile(string code) {
 				parseExpression(p.children[0]);
 				instructions ~= "0 test== $" ~ to!string(stack.length-1); // note: $ locations are used as a stack, with higher numbers being higher on the stack.
 				stack = stack.remove(stack.length-1);
-				int oldLabNum = labelNum++; //  labelNum could change when expression is parsed
+				int oldLabNum = labelNum; //  labelNum could change when expression is parsed
 				instructions ~= "jmpi label" ~ to!string(labelNum++); // the jmpi skips code if expression false
 				parseExpression(p.children[1]);
 				instructions ~= "label" ~ to!string(oldLabNum) ~ ":";
@@ -162,9 +161,8 @@ string[] compile(string code) {
 				 */
 				int startLabNum = labelNum; // label of start of loop
 				instructions ~= "label" ~ to!string(labelNum++) ~ ":";
-				labelNum++;
 				parseExpression(p.children[0]);
-				int endLabNum = labelNum; // label after loop
+				int endLabNum = labelNum++; // label after loop
 				instructions ~= "0 test== $" ~ to!string(stack.length-1);
 				stack = stack.remove(stack.length-1); // pop stack
 				instructions ~= "jmpi label" ~ to!string(endLabNum);
@@ -179,8 +177,13 @@ string[] compile(string code) {
 						writefln("Compiler error (line %d): type %s is not a pointer.",count(p.input[0..p.begin],"\n")+1,stack[$-1][1]);
 						exit(1);
 					}
-
+					
+					if (stack[$-1][2] == "yes") {
+						stack[$-1][2] = "no"; // if it's an address dereference it first
+						instructions ~= "$" ~ to!string(stack.length-1) ~ " read_" ~ to!string(bitwidth[stack[$-1][1]]) ~ " $" ~ to!string(stack.length-1);
+					}
 					stack[$-1][1] = stack[$-1][1][0..$-1]; // dereference the type by removing *
+
 				}
 
 				return;
@@ -253,11 +256,17 @@ string[] compile(string code) {
 				if (p.children.length > 1) { // we are incrementing or decrementing
 					assert(p.children.length == 2);
 					assert(p.children[1].matches[0] == "++" || p.children[1].matches[0] == "--");
-					instructions ~= "push $" ~ to!string(stack.length-1); // store the value because postfix increment/decrement doesn't change it
+					if (stack[$-1][2] == "no") {
+						instructions ~= "push $" ~ to!string(stack.length-1);
+					}
 					instructions ~= "$" ~ to!string(stack.length-1) ~ " read_" ~ bitwidth[stack[$-1][1]] ~ " $" ~ to!string(stack.length-1);
+					if (stack[$-1][2] == "yes") {
+						instructions ~= "push $" ~ to!string(stack.length-1); // store the value because postfix increment/decrement doesn't change it
+					}
 					instructions ~= p.children[1].matches[0] ~ " $" ~ to!string(stack.length-1); // increment or decrement
 					instructions ~= "$" ~ to!string(stack.length-1) ~ " write_" ~ bitwidth[stack[$-1][1]] ~ " " ~ stack[$-1][0]; // update variable
 					instructions ~= "pop $" ~ to!string(stack.length-1); // restore value
+					stack[$-1][2] = "no";
 				}
 
 				return;
