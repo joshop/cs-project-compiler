@@ -1,0 +1,7 @@
+$0 read_1 x
+$0 write_addr y
+end
+y:
+addr 0
+x:
+data 0

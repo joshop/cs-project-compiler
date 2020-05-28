@@ -7,6 +7,10 @@ The input language will be familiar to anyone who knows C. A program consists of
 * while(expression) statement
 * for (statement expression; expression) statement
 * A single semicolon, which does nothing.
+* The keyword break, which will exit the current loop
+* The keyword continue, which will start the next iteration of the current loop
+* Labels, which are identifiers followed by :.
+* The keyword goto followed by a label name, which will immediately go to the label.
 "Expressions" can be formed using the operators listed below, character literals (a character surrounded by ''), integer literals, and variable names.
 * x + y is the sum of x and y.
 * x - y is the difference between x and y.

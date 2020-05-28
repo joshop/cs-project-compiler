@@ -20,12 +20,17 @@ AddrVariable < ~(identifier)
 Dereference < '&'
 Type < ~(Type '*' / 'int' / 'char' / 'short')
 IncDec < '++' / '--'
-Statement < ';' / StatementDeclare ';' / Expression ';' / StatementBlock / StatementIf / StatementWhile / StatementFor
+Statement < ';' / StatementDeclare ';' / Expression ';' / StatementBlock / StatementIf / StatementWhile / StatementFor / StatementDo / StatementLabel / StatementGoto / StatementBreak / StatementContinue
 StatementBlock < '{' Statement* '}'
 StatementDeclare < Type Variable ('=' Expression)?
 StatementIf < 'if' '(' Expression ')' Statement ('else' Statement)
 StatementWhile < 'while' '(' Expression ')' Statement
 StatementFor < 'for' '(' Statement Expression ';' Expression ')' Statement
+StatementDo < 'do' Statement 'while' '(' Expression ')'
+StatementLabel < ~(identifier) ':'
+StatementGoto < 'goto' ~(identifier) ';'
+StatementBreak < 'break;'
+StatementContinue < 'continue;'
 Sizeof < 'sizeof' '('? (Type / Variable) ')'?
 ExpressionAtom < Sizeof / '(' Expression ')' / IntegerLiteral / CharLiteral / StringLiteral / Variable
 ExpressionUnaryPost < ExpressionAssignLeftRight IncDec / ExpressionAtom
@@ -67,7 +72,7 @@ ExpressionAssignLeftRight < AddrVariable / ExpressionAssignLeftParens
  * Most code should attempt to use at most 4 temps and use labels as much as possible.
  * The assignment and compound assignment operators exist and work as expected; however, *=, /=, %= and sometimes others may not be implemented in hardware. For example, on an x86_64 machine,
  * $1 &= $0
- * performs an AND rbx, rax.
+ * performs an AND rbx, rax (or: and %rax, %rbx if you prefer AT&T syntax).
  * Some other operators exist; notably, the read operator (MOV lside, [rside]) and the write operator (MOV [rside], lside). 
  * The read and write operators must be followed by an underscore and a bitwidth, which specifies the number of bytes to be read or written. Alternatively, addr will equal the CPU bitwidth.
  * There are also unary operators. The -, ~, !, ++ and -- unary operators exist, as well as push and pop, which manipulate the stack.
@@ -108,7 +113,8 @@ string[] compile(string code) {
 	string[] instructions; // list of output instructions, one per entry/line
 	int labelNum = 0; // number of consumed labels, used for label naming
 	int[][] temps; // temporary values like string constants
-	
+	int[] breakLabels = []; // locations to break to (WIP)
+	int[] continueLabels = []; // locations to continue to (WIP)
 	void parseExpression(ParseTree p) {
 		bool addrVariable = false; // addrVariable is whether the value is the address of a variable instead of its value
 		bool isRight = false; // ExpressionAssignLeft vs ExpressionAssignLeftRight
@@ -176,15 +182,19 @@ string[] compile(string code) {
 				 * lab2:
 				 */
 				int startLabNum = labelNum; // label of start of loop
+				continueLabels ~= startLabNum;
 				instructions ~= "label" ~ to!string(labelNum++) ~ ":";
 				parseExpression(p.children[0]);
 				int endLabNum = labelNum++; // label after loop
+				breakLabels ~= endLabNum;
 				instructions ~= "0 test== $" ~ to!string(stack.length - 1);
 				stack = stack.remove(stack.length - 1); // pop stack
 				instructions ~= "jmpi label" ~ to!string(endLabNum);
 				parseExpression(p.children[1]);
 				instructions ~= "jmp label" ~ to!string(startLabNum);
 				instructions ~= "label" ~ to!string(endLabNum) ~ ":";
+				breakLabels = breakLabels.remove(breakLabels.length-1);
+				continueLabels = continueLabels.remove(continueLabels.length-1);
 				return;
 		
 			case name ~ ".StatementFor":
@@ -199,10 +209,12 @@ string[] compile(string code) {
 				 * lab2:
 				 */
 				int startLabNum = labelNum++;
+				continueLabels ~= startLabNum;
 				parseExpression(p.children[0]); // the init expression
 				instructions ~= "label" ~ to!string(startLabNum) ~ ":";
 				parseExpression(p.children[1]); // the condition
 				int endLabNum = labelNum++;
+				breakLabels ~= endLabNum;
 				instructions ~= "0 test== $" ~ to!string(stack.length - 1);
 				stack = stack.remove(stack.length - 1);
 				instructions ~= "jmpi label" ~ to!string(endLabNum);
@@ -211,12 +223,60 @@ string[] compile(string code) {
 				stack = stack.remove(stack.length - 1); // increment is technically an *expression* so it returns a value
 				instructions ~= "jmp label" ~ to!string(startLabNum);
 				instructions ~= "label" ~ to!string(endLabNum) ~ ":";
+				breakLabels = breakLabels.remove(breakLabels.length-1);
+				continueLabels = continueLabels.remove(continueLabels.length-1);
 				return;
-		
+			case name ~ ".StatementDo":
+				/* Do loops are like this:
+				 * lab1:
+				 * (evaluate loop body)
+				 * (evaluate condition)
+				 * if (condition is true) jmp lab1
+				 * lab2:
+				 */
+				 int startLabNum = labelNum++;
+				 continueLabels ~= startLabNum;
+				 int endLabNum = labelNum++;
+				 breakLabels ~= endLabNum;
+				 instructions ~= "label" ~ to!string(startLabNum);
+				 parseExpression(p.children[0]); // statement
+				 parseExpression(p.children[1]); // condition
+				 instructions ~= "0 test!= $" ~ to!string(stack.length - 1);
+				 instructions ~= "jmpi label" ~ to!string(startLabNum);
+				 instructions ~= "label" ~ to!string(endLabNum);
+				 breakLabels = breakLabels.remove(breakLabels.length-1);
+				 continueLabels = continueLabels.remove(continueLabels.length-1);
+				 return;
+			case name ~ ".StatementLabel":
+				 instructions ~= "_" ~ p.matches[0] ~ ":";
+				 return;
+			case name ~ ".StatementGoto":
+				 if (instructions.canFind("_" ~ p.matches[0] ~ ":")) {
+					 instructions ~= "jmp _" ~ p.matches[0];
+				 } else {
+					 writefln("Compiler error (line %d): No label named %s.",count(p.input[0..p.begin], "\n") + 1, p.matches[0]);
+					 exit(1);
+				 }
+				 return;
+			case name ~ ".StatementBreak":
+				 if (breakLabels.length == 0) {
+					 writefln("Compiler error (line %d): Break used outside a loop.", count(p.input[0..p.begin], "\n") + 1);
+					 exit(1);
+				 } else {
+					instructions ~= "jmp label" ~ to!string(breakLabels[$-1]);
+				 }
+				 return;
+			case name ~ ".StatementContinue":
+				 if (continueLabels.length == 0) {
+					 writefln("Compiler error (line %d): Continue used outside a loop.", count(p.input[0..p.begin], "\n") + 1);
+					 exit(1);
+				 } else {
+					instructions ~= "jmp label" ~ to!string(continueLabels[$-1]);
+				 }
+				 return;
 			case name ~ ".ExpressionAssignLeftRight":
 				isRight = true; // trust me here, it should work; if it doesn't good luck. sincerely past self
-				goto case; // fallthrough, dereference it this time >:(
-		
+				goto case; // fallthrough, dereference it this time >:(	
 			case name ~ ".ExpressionAssignLeft":
 				parseExpression(p.children[0]);
 				if (p.matches[0] == "*") { // something like *p = 5; or *(x+5) = b;
@@ -373,8 +433,6 @@ string[] compile(string code) {
 				foreach(m; p.children[1..$]) {
 					assert(canFind(["+","-","*","/","%","&","|","^","<<",">>"], m.matches[0]), "Expression binary operation " ~ name ~ " tried to use operator " ~ m.matches[0] ~ ".");
 					parseExpression(m);
-					writeln("AAA");
-					writeln(stack);
 					string higher = bitwidth[stack[$-1][1]] > bitwidth[stack[$-2][1]] ? stack[$-1][1] : stack[$-2][1];
 					string lower = bitwidth[stack[$-1][1]] > bitwidth[stack[$-2][1]] ? stack[$-2][1] : stack[$-1][1];
 					int which = bitwidth[stack[$-1][1]] > bitwidth[stack[$-2][1]] ? 1 : 2; // which stack index has a higher bitwidth
